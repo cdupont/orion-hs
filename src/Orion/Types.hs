@@ -7,19 +7,23 @@
 
 module Orion.Types where
 
-import           Network.Wreq as W
+import           Network.Wreq as W hiding (delete)
 import           Control.Lens hiding ((.=))
 import           Data.Aeson as JSON
 import           Data.Aeson.BetterErrors as AB
-import           Data.Text hiding (head, tail, find, map, filter)
+import           Data.Text hiding (head, tail, find, map, filter, drop, toLower)
+import           Data.String
 import           GHC.Generics (Generic)
 import           Data.Maybe
+import           Data.String.Conversions
 import           Control.Monad.Reader
 import           Data.Foldable as F
 import           Network.HTTP.Client (HttpException)
-import           Control.Monad.Except (ExceptT)
+import           Control.Monad.Except (ExceptT, runExceptT)
 import qualified Data.HashMap.Lazy as HML 
-
+import           Data.Map as M hiding (map, drop, toLower)
+import           Data.Char
+import           Debug.Trace
 
 -- * Orion monad
 
@@ -39,84 +43,136 @@ defaultOrionConfig = OrionConfig {
   _orionUrl      = "http://localhost:1026",
   _fiwareService = "waziup"}
 
+-- | Run an Orion monad within IO.
+runOrion :: Orion a -> OrionConfig -> IO (Either OrionError a)
+runOrion o conf = runExceptT $ runReaderT o conf
+
 -- * Entities
 
 newtype EntityId = EntityId {unEntityId :: Text} deriving (Show, Eq, Generic, ToJSON, FromJSON)
 type EntityType = Text
 
 data Entity = Entity {
-  entId         :: EntityId,
-  entType       :: EntityType,
-  entAttributes :: [Attribute]
+  entId    :: EntityId,
+  entType  :: EntityType,
+  entAttrs :: Map AttributeId Attribute
   } deriving (Generic, Show)
 
 instance ToJSON Entity where
-   toJSON (Entity entId entType attrs) = 
-     merge_aeson $ (object ["id" .= entId, "type" .= entType]) : (map toJSON attrs)
+   toJSON (Entity entId entType attrs) = mergeAeson $ [object ["id" .= entId, "type" .= entType], toJSON attrs]
 
-parseEntity :: Parse e Entity
-parseEntity = do
-    eId   <- AB.key "id" asText
-    eType <- AB.key "type" asText
-    attrs <- catMaybes <$> forEachInObject parseAtt
+instance FromJSON Entity where
+  parseJSON o@(Object v) = do
+    eId   <- v .: "id"
+    eType <- v .: "type"
+    attrs <- parseJSON $ Object (HML.delete "id" $ HML.delete "type" v) 
     return $ Entity (EntityId eId) eType attrs where
-      parseAtt "id" = return Nothing 
-      parseAtt "type" = return Nothing 
-      parseAtt k = Just <$> parseAttribute (AttributeId k)
 
 -- * Attributes
 
-newtype AttributeId = AttributeId {unAttributeId :: Text} deriving (Show, Eq, Generic, ToJSON, FromJSON)
+newtype AttributeId = AttributeId {unAttributeId :: Text} deriving (Show, Eq, Ord, Generic, FromJSONKey, ToJSONKey, IsString)
 type AttributeType = Text
 
 data Attribute = Attribute {
-  attId       :: AttributeId,
   attType     :: AttributeType,
   attValue    :: Maybe Value,
-  attMetadata :: [Metadata]
+  attMetadata :: Map MetadataId Metadata
   } deriving (Generic, Show)
 
 instance ToJSON Attribute where
-   toJSON (Attribute (AttributeId attId) attType attVal mets) = 
-     object [ attId .= 
-        (object $ ["type" .= attType, 
-                   "value" .= attVal,
-                   "metadata" .= merge_aeson (map toJSON mets)])]
+  toJSON = genericToJSON defaultOptions {fieldLabelModifier = unCapitalize . drop 3}
 
-parseAttribute :: AttributeId -> Parse e Attribute
-parseAttribute attId = do
-    aType  <- AB.key    "type" asText
-    aValue <- AB.keyMay "value" AB.asValue
-    mets   <- AB.keyMay "metadata" (forEachInObject (parseMetadata.MetadataId))
-    return $ Attribute attId aType aValue (F.concat mets)
+instance FromJSON Attribute where
+  parseJSON = genericParseJSON defaultOptions {fieldLabelModifier = unCapitalize . drop 3}
 
 -- * Metadata
 
-newtype MetadataId = MetadataId {unMeetadataId :: Text} deriving (Show, Eq, Generic, ToJSON, FromJSON)
+newtype MetadataId = MetadataId {unMeetadataId :: Text} deriving (Show, Eq, Ord, Generic, ToJSONKey, FromJSONKey, IsString)
 type MetadataType = Text
 
 data Metadata = Metadata {
-  metId    :: MetadataId,
   metType  :: Maybe MetadataType,
   metValue :: Maybe Value
   } deriving (Generic, Show)
 
 instance ToJSON Metadata where
-   toJSON (Metadata (MetadataId id) mtyp mval) = 
-     object [ id .= 
-       (object $ catMaybes [("type",) <$> toJSON <$> mtyp,
-                            ("value",) <$> toJSON <$> mval]) ]
+  toJSON = genericToJSON defaultOptions {fieldLabelModifier = unCapitalize . drop 3}
 
-parseMetadata :: MetadataId -> Parse e Metadata
-parseMetadata mid = Metadata <$> pure mid
-                             <*> AB.keyMay "type" AB.asText
-                             <*> AB.keyMay "value" AB.asValue
+instance FromJSON Metadata where
+  parseJSON = genericParseJSON defaultOptions {fieldLabelModifier = unCapitalize . drop 3}
+
+
+-- * Subscriptions
+
+newtype SubId = SubId {unSubId :: Text} deriving (Show, Eq, Generic, ToJSON, FromJSON)
+
+-- | one subscription
+data Subscription = Subcription {
+  subId          :: SubId,       -- ^ id of the notification (attributed by the server)
+  subDescription :: Text,                -- ^ Description of the notification
+  subSubject     :: SubSubject,        -- ^ 
+  subNotif       :: SubNotif,  -- ^ 
+  subThrottling  :: Double              -- ^ minimum interval between two messages in seconds
+  } deriving (Show, Eq, Generic)
+
+instance ToJSON Subscription where
+  toJSON = genericToJSON $ defaultOptions {fieldLabelModifier = unCapitalize . drop 3}
+
+instance FromJSON Subscription where
+  parseJSON = genericParseJSON $ defaultOptions {fieldLabelModifier = unCapitalize . drop 3}
+
+data SubSubject = SubSubject {
+  subEntities  :: [SubEntities],
+  subCondition :: SubCondition
+  } deriving (Show, Eq, Generic)
+
+instance ToJSON SubSubject where
+  toJSON = genericToJSON $ defaultOptions {fieldLabelModifier = unCapitalize . drop 3}
+
+instance FromJSON SubSubject where
+  parseJSON = genericParseJSON $ defaultOptions {fieldLabelModifier = unCapitalize . drop 3}
+
+data SubEntities = SubEntities {
+  subIdPattern :: Text,
+  subType      :: Text
+  } deriving (Show, Eq, Generic)
+
+instance ToJSON SubEntities where
+  toJSON = genericToJSON $ defaultOptions {fieldLabelModifier = unCapitalize . drop 3}
+
+instance FromJSON SubEntities where
+  parseJSON = genericParseJSON $ defaultOptions {fieldLabelModifier = unCapitalize . drop 3}
+
+data SubNotif = SubNotif {
+  subHttp :: Map String String, 
+  subAttrs :: [Text]
+  } deriving (Show, Eq, Generic)
+
+instance ToJSON SubNotif where
+  toJSON = genericToJSON $ defaultOptions {fieldLabelModifier = unCapitalize . drop 3}
+
+instance FromJSON SubNotif where
+  parseJSON = genericParseJSON $ defaultOptions {fieldLabelModifier = unCapitalize . drop 3}
+
+data SubCondition = SubCondition {
+  subExpression :: Map String String
+  } deriving (Show, Eq, Generic)
+
+instance ToJSON SubCondition where
+  toJSON = genericToJSON $ defaultOptions {fieldLabelModifier = unCapitalize . drop 3}
+
+instance FromJSON SubCondition where
+  parseJSON = genericParseJSON $ defaultOptions {fieldLabelModifier = unCapitalize . drop 3}
 
 -- Miscellaneous
 
 type Path = Text
 
-merge_aeson :: [Value] -> Value
-merge_aeson = Object . HML.unions . map (\(Object x) -> x)
+mergeAeson :: [Value] -> Value
+mergeAeson = Object . HML.unions . map (\(Object x) -> x)
+
+unCapitalize :: String -> String
+unCapitalize (c:cs) = toLower c : cs
+unCapitalize [] = []
 
 makeLenses ''OrionConfig

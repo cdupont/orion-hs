@@ -12,7 +12,7 @@ import           Network.HTTP.Types
 import           Data.Aeson as JSON hiding (Options)
 import           Data.Aeson.BetterErrors as AB
 import           Data.Aeson.Casing
-import           Data.Text hiding (head, tail, find, map, filter)
+import           Data.Text hiding (head, tail, find, map, filter, singleton, empty)
 import           Data.Text.Encoding as TE
 import           Data.Maybe
 import           Data.Aeson.BetterErrors.Internal
@@ -20,9 +20,10 @@ import           Data.Time
 import           Data.Time.ISO8601
 import           Data.Foldable as F
 import           Data.Monoid
+import           Data.Map
 import qualified Data.HashMap.Strict as H
 import qualified Data.ByteString.Char8 as C8
-import qualified Data.ByteString.Lazy as BSL
+import qualified Data.ByteString.Lazy as BL
 import           Data.String.Conversions
 import           Control.Lens hiding ((.=))
 import           Control.Monad.Reader
@@ -42,7 +43,15 @@ getEntities mq = do
        Just q -> [("q", Just $ encodeUtf8 q)]
        Nothing -> []
   let (query :: Query) = qq ++ [("limit", Just $ encodeUtf8 "1000")]
-  orionGet (decodeUtf8 $ "/v2/entities" <> (renderQuery True query))  (eachInArray parseEntity)
+  body <- orionGet (decodeUtf8 $ "/v2/entities" <> (renderQuery True query))
+  case eitherDecode body of
+    Right ret -> do
+      debug $ "Orion success: " ++ (show ret) 
+      return ret
+    Left (e :: String) -> do
+      debug $ "Orion parse error: " ++ (show e) 
+      throwError $ ParseError $ pack (show e)
+
 
 postEntity :: Entity -> Orion ()
 postEntity e = do
@@ -50,33 +59,58 @@ postEntity e = do
   orionPost "/v2/entities" (toJSON e)
 
 getEntity :: EntityId -> Orion Entity
-getEntity (EntityId eid) = orionGet ("/v2/entities/" <> eid) parseEntity
+getEntity (EntityId eid) = do
+  body <- orionGet ("/v2/entities/" <> eid)
+  case eitherDecode body of
+    Right ret -> do
+      debug $ "Orion success: " ++ (show ret) 
+      return ret
+    Left (e :: String) -> do
+      debug $ "Orion parse error: " ++ (show e) 
+      throwError $ ParseError $ pack (show e)
 
 deleteEntity :: EntityId -> Orion ()
 deleteEntity (EntityId eid) = orionDelete ("/v2/entities/" <> eid)
 
-postAttribute :: EntityId -> Attribute -> Orion ()
-postAttribute (EntityId eid) att = do
+postAttribute :: EntityId -> (AttributeId, Attribute) -> Orion ()
+postAttribute (EntityId eid) (attId, att) = do
   debug $ "Post attribute: " <> (convertString $ JSON.encode att)
-  orionPost ("/v2/entities/" <> eid <> "/attrs") (toJSON att)
+  orionPost ("/v2/entities/" <> eid <> "/attrs") (toJSON $ singleton attId att)
 
 postTextAttributeOrion :: EntityId -> AttributeId -> Text -> Orion ()
 postTextAttributeOrion (EntityId eid) attId val = do
   debug $ convertString $ "put attribute in Orion: " <> val
-  orionPost ("/v2/entities/" <> eid <> "/attrs") (toJSON $ getSimpleAttr attId val)
+  orionPost ("/v2/entities/" <> eid <> "/attrs") (toJSON $ fromList [getSimpleAttr attId val])
 
 deleteAttribute :: EntityId -> AttributeId -> Orion ()
 deleteAttribute (EntityId eid) (AttributeId attId) = do
   debug $ "Delete attribute"
   orionDelete ("/v2/entities/" <> eid <> "/attrs/" <> attId)
 
---getSubscriptions :: Orion [Entity]
---getSubscriptions mq = do
---  let qq = case mq of
---       Just q -> [("q", Just $ encodeUtf8 q)]
---       Nothing -> []
---  let (query :: Query) = qq ++ [("limit", Just $ encodeUtf8 "1000")]
---  orionGet (decodeUtf8 $ "/v2/entities" <> (renderQuery True query))  (eachInArray parseEntity)
+getSubscriptions :: Orion [Subscription]
+getSubscriptions = undefined
+--  orionGet (decodeUtf8 $ "/v2/subscriptions" (eachInArray parseEntity)
+
+postSub :: Subscription -> Orion ()
+postSub e = do
+  debug $ convertString $ "Entity: " <> (JSON.encode e)
+  orionPost "/v2/entities" (toJSON e)
+
+getSub :: SubId -> Orion Subscription
+getSub (SubId eid) = do
+  body <- orionGet ("/v2/entities/" <> eid)
+  debug $ "Keycloak success: " ++ (show body) 
+  case eitherDecode body of
+    Right ret -> do
+      debug $ "Keycloak success: " ++ (show ret) 
+      return ret
+    Left (err2 :: String) -> do
+      debug $ "Keycloak parse error: " ++ (show err2) 
+      throwError $ ParseError $ pack (show err2)
+
+
+deleteSub :: SubId -> Orion ()
+deleteSub (SubId sid) = orionDelete ("/v2/subscriptions/" <> sid)
 
 
 -- * Requests to Orion.
@@ -92,24 +126,17 @@ getOrionDetails path = do
   let url = (unpack $ baseUrl <> path) 
   return (url, opts)
 
-orionGet :: (Show b) => Path -> Parse Text b -> Orion b
-orionGet path parser = do 
+orionGet :: Path -> Orion BL.ByteString 
+orionGet path = do 
   (url, opts) <- getOrionDetails path 
   info $ "Issuing ORION GET with url: " ++ (show url) 
   debug $ "  headers: " ++ (show $ opts ^. W.headers) 
   eRes <- C.try $ liftIO $ W.getWith opts url
   case eRes of 
     Right res -> do
-      let body = fromJust $ res ^? responseBody
-      case AB.parse parser body of
-        Right ret -> do
-          debug $ "Orion result: " ++ (show ret)
-          return ret
-        Left err2 -> do
-          err $ "Orion parse error: " ++ (show err2)
-          throwError $ ParseError $ pack (show err2)
+      return $ fromJust $ res ^? responseBody
     Left err -> do
-      warn $ "Orion HTTP Error: " ++ (show err)
+      warn $ "Orion HTTP error: " ++ (show err)
       throwError $ HTTPError err
 
 orionPost :: (Postable dat, Show dat) => Path -> dat -> Orion ()
@@ -152,30 +179,30 @@ orionPut path dat = do
 
 -- * Helpers
 
-fromSimpleAttribute :: AttributeId -> [Attribute] -> Maybe Text
+fromSimpleAttribute :: AttributeId -> Map AttributeId Attribute -> Maybe Text
 fromSimpleAttribute attId attrs = do
-   (Attribute _ _ mval _) <- find (\(Attribute attId' _ _ _) -> attId' == attId) attrs
-   val <- mval
-   getString val
+  (Attribute _ mval _) <- attrs !? attId
+  val <- mval
+  getString val
 
-fromSimpleMetadata :: MetadataId -> [Metadata] -> Maybe Text
+fromSimpleMetadata :: MetadataId -> Map MetadataId Metadata -> Maybe Text
 fromSimpleMetadata mid mets = do
-   (Metadata _ _ mval) <- find (\(Metadata mid' _ _) -> mid' == mid) mets
-   val <- mval
-   getString val
+  (Metadata _ mval) <- mets !? mid
+  val <- mval
+  getString val
 
 getString :: Value -> Maybe Text
 getString (String s) = Just s
 getString _ = Nothing
 
-getSimpleAttr :: AttributeId -> Text -> Attribute
-getSimpleAttr attId val = Attribute attId "String" (Just $ toJSON val) []
+getSimpleAttr :: AttributeId -> Text -> (AttributeId, Attribute)
+getSimpleAttr attId val = (attId, Attribute "String" (Just $ toJSON val) empty)
 
-getTextMetadata :: MetadataId -> Text -> Metadata
-getTextMetadata metId val = Metadata metId (Just "String") (Just $ toJSON val)
+getTextMetadata :: MetadataId -> Text -> (MetadataId, Metadata)
+getTextMetadata metId val = (metId, Metadata (Just "String") (Just $ toJSON val))
 
-getTimeMetadata :: MetadataId -> UTCTime -> Metadata
-getTimeMetadata metId val = Metadata metId (Just "DateTime") (Just $ toJSON $ formatISO8601 val)
+getTimeMetadata :: MetadataId -> UTCTime -> (MetadataId, Metadata)
+getTimeMetadata metId val = (metId, (Metadata (Just "DateTime") (Just $ toJSON $ formatISO8601 val)))
 
 debug, warn, info, err :: (MonadIO m) => String -> m ()
 debug s = liftIO $ debugM   "Orion" s
