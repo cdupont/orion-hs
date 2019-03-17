@@ -35,7 +35,7 @@ import           System.Log.Logger
 import           GHC.Generics (Generic)
 import           Debug.Trace
 
--- * Orion REST interface
+-- * Entities
 
 getEntities :: Maybe Text -> Orion [Entity]
 getEntities mq = do
@@ -87,14 +87,26 @@ deleteAttribute (EntityId eid) (AttributeId attId) = do
   debug $ "Delete attribute"
   orionDelete ("/v2/entities/" <> eid <> "/attrs/" <> attId)
 
-getSubscriptions :: Orion [Subscription]
-getSubscriptions = undefined
---  orionGet (decodeUtf8 $ "/v2/subscriptions" (eachInArray parseEntity)
+
+-- * Subscriptions
+
+getSubs :: Orion [Subscription]
+getSubs = do 
+  debug $ "Get subscriptions"
+  body <- orionGet ("/v2/subscriptions/")
+  debug $ "Orion body : " ++ (show body) 
+  case eitherDecode body of
+    Right ret -> do
+      debug $ "Keycloak success: " ++ (show ret) 
+      return ret
+    Left (err2 :: String) -> do
+      debug $ "Keycloak parse error: " ++ (show err2) 
+      throwError $ ParseError $ pack (show err2)
 
 postSub :: Subscription -> Orion ()
 postSub e = do
-  debug $ convertString $ "Entity: " <> (JSON.encode e)
-  orionPost "/v2/entities" (toJSON e)
+  debug $ convertString $ "PostSubscription: " <> (JSON.encode e)
+  orionPost "/v2/subscriptions" (toJSON e)
 
 getSub :: SubId -> Orion Subscription
 getSub (SubId eid) = do

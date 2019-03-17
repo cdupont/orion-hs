@@ -70,7 +70,7 @@ instance FromJSON Entity where
 
 -- * Attributes
 
-newtype AttributeId = AttributeId {unAttributeId :: Text} deriving (Show, Eq, Ord, Generic, FromJSONKey, ToJSONKey, IsString)
+newtype AttributeId = AttributeId {unAttributeId :: Text} deriving (Show, Eq, Ord, Generic, FromJSON, ToJSON, FromJSONKey, ToJSONKey, IsString)
 type AttributeType = Text
 
 data Attribute = Attribute {
@@ -107,22 +107,22 @@ instance FromJSON Metadata where
 newtype SubId = SubId {unSubId :: Text} deriving (Show, Eq, Generic, ToJSON, FromJSON)
 
 -- | one subscription
-data Subscription = Subcription {
-  subId          :: SubId,       -- ^ id of the notification (attributed by the server)
-  subDescription :: Text,                -- ^ Description of the notification
-  subSubject     :: SubSubject,        -- ^ 
-  subNotif       :: SubNotif,  -- ^ 
-  subThrottling  :: Double              -- ^ minimum interval between two messages in seconds
+data Subscription = Subscription {
+  subId           :: Maybe SubId,       -- ^ id of the subscription 
+  subDescription  :: Text,              -- ^ Description
+  subSubject      :: SubSubject,        -- ^ what is subscribed on, and conditions for triggering
+  subNotification :: SubNotif,          -- ^ what to do when triggered
+  subThrottling   :: Double             -- ^ minimum interval between two messages in seconds
   } deriving (Show, Eq, Generic)
 
 instance ToJSON Subscription where
-  toJSON = genericToJSON $ defaultOptions {fieldLabelModifier = unCapitalize . drop 3}
+  toJSON = genericToJSON $ defaultOptions {fieldLabelModifier = unCapitalize . drop 3, omitNothingFields = True}
 
 instance FromJSON Subscription where
-  parseJSON = genericParseJSON $ defaultOptions {fieldLabelModifier = unCapitalize . drop 3}
+  parseJSON = genericParseJSON $ defaultOptions {fieldLabelModifier = unCapitalize . drop 3, omitNothingFields = True}
 
 data SubSubject = SubSubject {
-  subEntities  :: [SubEntities],
+  subEntities  :: [SubEntity],
   subCondition :: SubCondition
   } deriving (Show, Eq, Generic)
 
@@ -132,20 +132,22 @@ instance ToJSON SubSubject where
 instance FromJSON SubSubject where
   parseJSON = genericParseJSON $ defaultOptions {fieldLabelModifier = unCapitalize . drop 3}
 
-data SubEntities = SubEntities {
-  subIdPattern :: Text,
-  subType      :: Text
+data SubEntity = SubEntity {
+  subEntId   :: EntityId,
+  subEntType :: Maybe Text
   } deriving (Show, Eq, Generic)
 
-instance ToJSON SubEntities where
-  toJSON = genericToJSON $ defaultOptions {fieldLabelModifier = unCapitalize . drop 3}
+instance ToJSON SubEntity where
+  toJSON = genericToJSON $ defaultOptions {fieldLabelModifier = unCapitalize . drop 6, omitNothingFields = True}
 
-instance FromJSON SubEntities where
-  parseJSON = genericParseJSON $ defaultOptions {fieldLabelModifier = unCapitalize . drop 3}
+instance FromJSON SubEntity where
+  parseJSON = genericParseJSON $ defaultOptions {fieldLabelModifier = unCapitalize . drop 6, omitNothingFields = True}
 
 data SubNotif = SubNotif {
-  subHttp :: Map String String, 
-  subAttrs :: [Text]
+  subHttpCustom  :: SubHttpCustom, 
+  subAttrs       :: [AttributeId],
+  subAttrsFormat :: Text,
+  subMetadata    :: [Text]
   } deriving (Show, Eq, Generic)
 
 instance ToJSON SubNotif where
@@ -155,13 +157,27 @@ instance FromJSON SubNotif where
   parseJSON = genericParseJSON $ defaultOptions {fieldLabelModifier = unCapitalize . drop 3}
 
 data SubCondition = SubCondition {
-  subExpression :: Map String String
+  subCondAttrs      :: [AttributeId],
+  subCondExpression :: Map Text Text
   } deriving (Show, Eq, Generic)
 
 instance ToJSON SubCondition where
-  toJSON = genericToJSON $ defaultOptions {fieldLabelModifier = unCapitalize . drop 3}
+  toJSON = genericToJSON $ defaultOptions {fieldLabelModifier = unCapitalize . drop 7}
 
 instance FromJSON SubCondition where
+  parseJSON = genericParseJSON $ defaultOptions {fieldLabelModifier = unCapitalize . drop 7}
+
+data SubHttpCustom = SubHttpCustom {
+  subUrl :: Text,
+  subPayload :: Text,
+  subMethod  :: Text,
+  subHeaders :: Map Text Text
+  } deriving (Show, Eq, Generic)
+
+instance ToJSON SubHttpCustom where
+  toJSON = genericToJSON $ defaultOptions {fieldLabelModifier = unCapitalize . drop 3}
+
+instance FromJSON SubHttpCustom where
   parseJSON = genericParseJSON $ defaultOptions {fieldLabelModifier = unCapitalize . drop 3}
 
 -- Miscellaneous
