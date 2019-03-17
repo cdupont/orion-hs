@@ -23,6 +23,7 @@ import           Control.Monad.Except (ExceptT, runExceptT)
 import qualified Data.HashMap.Lazy as HML 
 import           Data.Map as M hiding (map, drop, toLower)
 import           Data.Char
+import           Data.Time
 import           Debug.Trace
 
 -- * Orion monad
@@ -87,7 +88,7 @@ instance FromJSON Attribute where
 
 -- * Metadata
 
-newtype MetadataId = MetadataId {unMeetadataId :: Text} deriving (Show, Eq, Ord, Generic, ToJSONKey, FromJSONKey, IsString)
+newtype MetadataId = MetadataId {unMeetadataId :: Text} deriving (Show, Eq, Ord, Generic, FromJSON, ToJSON, ToJSONKey, FromJSONKey, IsString)
 type MetadataType = Text
 
 data Metadata = Metadata {
@@ -104,6 +105,14 @@ instance FromJSON Metadata where
 
 -- * Subscriptions
 
+data SubStatus = SubActive | SubInactive | SubFailed deriving (Show, Eq, Generic)
+
+instance FromJSON SubStatus where
+  parseJSON = genericParseJSON $ defaultOptions {constructorTagModifier = unCapitalize . drop 3, allNullaryToStringTag = True}
+
+instance ToJSON SubStatus where
+  toJSON = genericToJSON $ defaultOptions {constructorTagModifier = unCapitalize . drop 3, allNullaryToStringTag = True}
+
 newtype SubId = SubId {unSubId :: Text} deriving (Show, Eq, Generic, ToJSON, FromJSON)
 
 -- | one subscription
@@ -112,7 +121,8 @@ data Subscription = Subscription {
   subDescription  :: Text,              -- ^ Description
   subSubject      :: SubSubject,        -- ^ what is subscribed on, and conditions for triggering
   subNotification :: SubNotif,          -- ^ what to do when triggered
-  subThrottling   :: Double             -- ^ minimum interval between two messages in seconds
+  subThrottling   :: Double,            -- ^ minimum interval between two messages in seconds
+  subStatus       :: Maybe SubStatus
   } deriving (Show, Eq, Generic)
 
 instance ToJSON Subscription where
@@ -144,10 +154,14 @@ instance FromJSON SubEntity where
   parseJSON = genericParseJSON $ defaultOptions {fieldLabelModifier = unCapitalize . drop 6, omitNothingFields = True}
 
 data SubNotif = SubNotif {
-  subHttpCustom  :: SubHttpCustom, 
-  subAttrs       :: [AttributeId],
-  subAttrsFormat :: Text,
-  subMetadata    :: [Text]
+  subHttpCustom       :: SubHttpCustom, 
+  subAttrs            :: [AttributeId],
+  subAttrsFormat      :: Text,
+  subMetadata         :: [Text],
+  subTimesSent        :: Maybe Int,
+  subLastNotification :: Maybe UTCTime,
+  subLastSuccess      :: Maybe UTCTime,
+  subLastFailure      :: Maybe UTCTime
   } deriving (Show, Eq, Generic)
 
 instance ToJSON SubNotif where

@@ -12,7 +12,7 @@ import           Network.HTTP.Types
 import           Data.Aeson as JSON hiding (Options)
 import           Data.Aeson.BetterErrors as AB
 import           Data.Aeson.Casing
-import           Data.Text hiding (head, tail, find, map, filter, singleton, empty)
+import           Data.Text  as T hiding (head, tail, find, map, filter, singleton, empty)
 import           Data.Text.Encoding as TE
 import           Data.Maybe
 import           Data.Aeson.BetterErrors.Internal
@@ -20,7 +20,7 @@ import           Data.Time
 import           Data.Time.ISO8601
 import           Data.Foldable as F
 import           Data.Monoid
-import           Data.Map
+import           Data.Map hiding (lookup, drop)
 import qualified Data.HashMap.Strict as H
 import qualified Data.ByteString.Char8 as C8
 import qualified Data.ByteString.Lazy as BL
@@ -53,10 +53,11 @@ getEntities mq = do
       throwError $ ParseError $ pack (show e)
 
 
-postEntity :: Entity -> Orion ()
+postEntity :: Entity -> Orion SubId 
 postEntity e = do
   debug $ convertString $ "Entity: " <> (JSON.encode e)
-  orionPost "/v2/entities" (toJSON e)
+  res <- orionPost "/v2/entities" (toJSON e)
+  return $ SubId $ convertString res
 
 getEntity :: EntityId -> Orion Entity
 getEntity (EntityId eid) = do
@@ -75,12 +76,12 @@ deleteEntity (EntityId eid) = orionDelete ("/v2/entities/" <> eid)
 postAttribute :: EntityId -> (AttributeId, Attribute) -> Orion ()
 postAttribute (EntityId eid) (attId, att) = do
   debug $ "Post attribute: " <> (convertString $ JSON.encode att)
-  orionPost ("/v2/entities/" <> eid <> "/attrs") (toJSON $ singleton attId att)
+  void $ orionPost ("/v2/entities/" <> eid <> "/attrs") (toJSON $ singleton attId att)
 
 postTextAttributeOrion :: EntityId -> AttributeId -> Text -> Orion ()
 postTextAttributeOrion (EntityId eid) attId val = do
   debug $ convertString $ "put attribute in Orion: " <> val
-  orionPost ("/v2/entities/" <> eid <> "/attrs") (toJSON $ fromList [getSimpleAttr attId val])
+  void $ orionPost ("/v2/entities/" <> eid <> "/attrs") (toJSON $ fromList [getSimpleAttr attId val])
 
 deleteAttribute :: EntityId -> AttributeId -> Orion ()
 deleteAttribute (EntityId eid) (AttributeId attId) = do
@@ -97,27 +98,29 @@ getSubs = do
   debug $ "Orion body : " ++ (show body) 
   case eitherDecode body of
     Right ret -> do
-      debug $ "Keycloak success: " ++ (show ret) 
+      debug $ "Orion success: " ++ (show ret) 
       return ret
     Left (err2 :: String) -> do
-      debug $ "Keycloak parse error: " ++ (show err2) 
+      debug $ "Orion parse error: " ++ (show err2) 
       throwError $ ParseError $ pack (show err2)
 
-postSub :: Subscription -> Orion ()
+postSub :: Subscription -> Orion SubId 
 postSub e = do
   debug $ convertString $ "PostSubscription: " <> (JSON.encode e)
-  orionPost "/v2/subscriptions" (toJSON e)
+  res <- orionPost "/v2/subscriptions" (toJSON e)
+  debug $ "Orion resp: " ++ (show res)
+  return $ SubId $ convertString res
 
 getSub :: SubId -> Orion Subscription
 getSub (SubId eid) = do
-  body <- orionGet ("/v2/entities/" <> eid)
-  debug $ "Keycloak success: " ++ (show body) 
+  body <- orionGet ("/v2/subscriptions/" <> eid)
+  debug $ "Orion success: " ++ (show body) 
   case eitherDecode body of
     Right ret -> do
-      debug $ "Keycloak success: " ++ (show ret) 
+      debug $ "Orion success: " ++ (show ret) 
       return ret
     Left (err2 :: String) -> do
-      debug $ "Keycloak parse error: " ++ (show err2) 
+      debug $ "Orion parse error: " ++ (show err2) 
       throwError $ ParseError $ pack (show err2)
 
 
@@ -151,15 +154,18 @@ orionGet path = do
       warn $ "Orion HTTP error: " ++ (show err)
       throwError $ HTTPError err
 
-orionPost :: (Postable dat, Show dat) => Path -> dat -> Orion ()
+orionPost :: (Postable dat, Show dat) => Path -> dat -> Orion Text 
 orionPost path dat = do 
   (url, opts) <- getOrionDetails path 
   info $ "Issuing ORION POST with url: " ++ (show url) 
   debug $ "  data: " ++ (show dat) 
   debug $ "  headers: " ++ (show $ opts ^. W.headers) 
   eRes <- C.try $ liftIO $ W.postWith opts url dat
+  debug $ " resp: " ++ (show eRes) 
   case eRes of 
-    Right res -> return ()
+    Right res -> do
+     let headers = fromJust $ res ^? responseHeaders
+     return $ T.drop 18 $ convertString $ fromJust $ lookup "Location" headers
     Left err -> do
       warn $ "Orion HTTP Error: " ++ (show err)
       throwError $ HTTPError err
