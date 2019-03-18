@@ -123,10 +123,12 @@ getSub (SubId eid) = do
       debug $ "Orion parse error: " ++ (show err2) 
       throwError $ ParseError $ pack (show err2)
 
-
 deleteSub :: SubId -> Orion ()
 deleteSub (SubId sid) = orionDelete ("/v2/subscriptions/" <> sid)
 
+patchSub :: SubId -> Map Text Text -> Orion () 
+patchSub (SubId eid) patch = do
+  orionPatch ("/v2/subscriptions/" <> eid) (toJSON patch)
 
 -- * Requests to Orion.
 
@@ -189,6 +191,19 @@ orionPut path dat = do
   debug $ "  data: " ++ (show dat) 
   debug $ "  headers: " ++ (show $ opts ^. W.headers) 
   eRes <- C.try $ liftIO $ W.putWith opts url dat
+  case eRes of 
+    Right res -> return ()
+    Left err -> do
+      warn $ "Orion HTTP Error: " ++ (show err)
+      throwError $ HTTPError err
+
+orionPatch :: (Postable dat, Show dat) => Path -> dat -> Orion ()
+orionPatch path dat = do 
+  (url, opts) <- getOrionDetails path 
+  info $ "Issuing ORION PATCH with url: " ++ (show url) 
+  debug $ "  data: " ++ (show dat) 
+  debug $ "  headers: " ++ (show $ opts ^. W.headers) 
+  eRes <- C.try $ liftIO $ W.customPayloadMethodWith "PATCH" opts url dat
   case eRes of 
     Right res -> return ()
     Left err -> do

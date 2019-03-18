@@ -122,7 +122,8 @@ data Subscription = Subscription {
   subSubject      :: SubSubject,        -- ^ what is subscribed on, and conditions for triggering
   subNotification :: SubNotif,          -- ^ what to do when triggered
   subThrottling   :: Double,            -- ^ minimum interval between two messages in seconds
-  subStatus       :: Maybe SubStatus
+  subStatus       :: Maybe SubStatus,
+  subExpires      :: Maybe UTCTime
   } deriving (Show, Eq, Generic)
 
 instance ToJSON Subscription where
