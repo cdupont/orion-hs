@@ -105,7 +105,7 @@ instance FromJSON Metadata where
 
 -- * Subscriptions
 
-data SubStatus = SubActive | SubInactive | SubFailed deriving (Show, Eq, Generic)
+data SubStatus = SubActive | SubInactive | SubFailed | SubExpired deriving (Show, Eq, Generic)
 
 instance FromJSON SubStatus where
   parseJSON = genericParseJSON $ defaultOptions {constructorTagModifier = unCapitalize . drop 3, allNullaryToStringTag = True}
